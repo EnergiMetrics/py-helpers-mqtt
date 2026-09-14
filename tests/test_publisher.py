@@ -92,16 +92,12 @@ def test_connect_tls(
     config: MQTTConfig,
     client: MagicMock,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
     custom_ca: bool,
 ) -> None:
     monkeypatch.setenv("MQTT_PASSWORD", "secret")
-    ca_cert: str | None = None
-    if custom_ca:
-        certificate = ssl.create_default_context().get_ca_certs(binary_form=True)[0]
-        ca_file = tmp_path / "ca.pem"
-        ca_file.write_text(ssl.DER_cert_to_PEM_cert(certificate))
-        ca_cert = str(ca_file)
+    ca_cert = (
+        str(Path(__file__).parent / "fixtures" / "test_ca.pem") if custom_ca else None
+    )
     tls_config = config.model_copy(
         update={
             "broker": config.broker.model_copy(
@@ -118,7 +114,12 @@ def test_connect_tls(
         accepted(client),
         mqtt.MQTT_ERR_SUCCESS,
     )[1]
-    publisher.connect()
+    with patch(
+        "energimetrics.helpers.mqtt.publisher.ssl.create_default_context",
+        wraps=ssl.create_default_context,
+    ) as create_context:
+        publisher.connect()
+    create_context.assert_called_once_with(cafile=ca_cert)
     client.username_pw_set.assert_called_once_with("user", "secret")
     client.connect.assert_called_once_with("broker.example.com", 8883)
     context = client.tls_set_context.call_args.args[0]
@@ -127,8 +128,6 @@ def test_connect_tls(
     assert context.check_hostname is True
     if custom_ca:
         assert len(context.get_ca_certs()) == 1
-    else:
-        assert len(context.get_ca_certs()) > 0
     client.tls_insecure_set.assert_not_called()
     client.reconnect_delay_set.assert_called_once_with(min_delay=1, max_delay=60)
     assert client.connect_timeout == config.connect_timeout_seconds
