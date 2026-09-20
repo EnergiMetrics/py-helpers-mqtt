@@ -3,6 +3,7 @@ name = "energimetrics.helpers.mqtt"
 version = "0.1.0"
 description = "A reusable publish-only MQTT helper for Energimetrics Python applications"
 readme = "README.md"
+license = "Apache-2.0"
 
 requires-python = ">=3.14"
 dependencies = [
