@@ -1,5 +1,6 @@
 """Broker-free tests of the publishing contract."""
 
+import socket
 import ssl
 from collections.abc import Iterator
 from pathlib import Path
@@ -147,6 +148,51 @@ def test_connection_failure(
         MQTTPublisher(config).connect()
     client.loop_start.assert_not_called()
     client.tls_set_context.assert_not_called()
+
+
+@pytest.mark.parametrize("failure_type", [ConnectionRefusedError, TimeoutError])
+def test_initial_socket_failure_can_retry_with_real_client(
+    config: MQTTConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_type: type[OSError],
+) -> None:
+    monkeypatch.setenv("MQTT_PASSWORD", "secret")
+    config = config.model_copy(update={"connect_timeout_seconds": 2.5})
+    publisher = MQTTPublisher(config)
+    failures = [failure_type("broker unavailable") for _ in range(2)]
+
+    # Only replace opening the TCP connection. Paho's state transitions,
+    # CONNECT/CONNACK processing, network loop and shutdown remain real.
+    client_socket, broker_socket = socket.socketpair()
+    with (
+        client_socket,
+        broker_socket,
+        patch(
+            "paho.mqtt.client.socket.create_connection",
+            side_effect=[*failures, client_socket],
+        ) as create_connection,
+    ):
+        try:
+            for attempt, failure in enumerate(failures, start=1):
+                with pytest.raises(
+                    MQTTConnectionError, match=r"^Failed to connect to MQTT broker$"
+                ) as error:
+                    publisher.connect()
+                assert error.value.__cause__ is failure
+                assert create_connection.call_count == attempt
+                assert not publisher.is_connected
+
+            # A successful MQTT 3.1.1 CONNACK from the simulated broker.
+            broker_socket.sendall(b"\x20\x02\x00\x00")
+            publisher.connect()
+            assert publisher.is_connected
+            assert create_connection.call_count == 3
+            for call in create_connection.call_args_list:
+                assert call.args == ((config.broker.host, config.broker.port),)
+                assert call.kwargs["timeout"] == config.connect_timeout_seconds
+        finally:
+            publisher.disconnect()
+        assert not publisher.is_connected
 
 
 def test_disconnect_callback(config: MQTTConfig, client: MagicMock) -> None:

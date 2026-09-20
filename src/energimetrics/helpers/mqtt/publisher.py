@@ -24,6 +24,7 @@ class MQTTPublisher:
     def __init__(self, config: MQTTConfig) -> None:
         self._config = config
         self._client = mqtt.Client(CallbackAPIVersion.VERSION2)
+        self._client.connect_timeout = self._config.connect_timeout_seconds
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.reconnect_delay_set(min_delay=1, max_delay=60)
@@ -96,7 +97,6 @@ class MQTTPublisher:
                     ssl.create_default_context(cafile=self._config.broker.tls.ca_cert)
                 )
                 self._tls_configured = True
-            self._client.connect_timeout = self._config.connect_timeout_seconds
             result = self._client.connect(
                 self._config.broker.host, self._config.broker.port
             )
